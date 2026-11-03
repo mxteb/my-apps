@@ -98,9 +98,13 @@ class _MediaViewerState extends State<MediaViewer> {
                 final item = _items[i];
                 return s.isVideo(item)
                     ? _VideoView(key: ValueKey('v${item.id}'), asset: item, active: i == _index)
-                    : _PhotoView(key: ValueKey('p${item.id}'), asset: item, onZoom: (z) {
-                        if (z != _zoomed) setState(() => _zoomed = z);
-                      });
+                    : _PhotoView(
+                        key: ValueKey('p${item.id}'),
+                        asset: item,
+                        onZoom: (z) {
+                          if (z != _zoomed) setState(() => _zoomed = z);
+                        },
+                      );
               },
             ),
           ),
@@ -142,8 +146,7 @@ class _MediaViewerState extends State<MediaViewer> {
                           ],
                         ),
                       ),
-                      if (_items.length > 1)
-                        Text('${_index + 1} / ${_items.length}', style: const TextStyle(color: Colors.white, fontSize: 13)),
+                      if (_items.length > 1) Text('${_index + 1} / ${_items.length}', style: const TextStyle(color: Colors.white, fontSize: 13)),
                     ],
                   ),
                 ),
@@ -267,7 +270,9 @@ class _PhotoViewState extends State<_PhotoView> {
       }
       final b = snap.data;
       if (b == null) {
-        return Center(child: Text(tr('تعذر فتح الصورة', 'Could not open the photo'), style: const TextStyle(color: Colors.white70)));
+        return Center(
+          child: Text(tr('تعذر فتح الصورة', 'Could not open the photo'), style: const TextStyle(color: Colors.white70)),
+        );
       }
       return GestureDetector(
         onDoubleTapDown: (d) => _doubleTap = d,
@@ -386,7 +391,11 @@ class _VideoViewState extends State<_VideoView> {
                 child: Container(
                   width: 76,
                   height: 76,
-                  decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0x66000000), border: Border.all(color: Colors.white, width: 2)),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0x66000000),
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
                   child: Icon(v.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white, size: 46),
                 ),
               ),

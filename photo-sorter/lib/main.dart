@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'l10n.dart';
 import 'screens/home.dart';
@@ -24,6 +25,8 @@ class PhotoSorterApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
       locale: Locale(settings.lang),
+      supportedLocales: const [Locale('ar'), Locale('en')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       builder: (context, child) => Directionality(textDirection: isAr ? TextDirection.rtl : TextDirection.ltr, child: child!),
       home: HomeScreen(sorter: sorter),
     ),

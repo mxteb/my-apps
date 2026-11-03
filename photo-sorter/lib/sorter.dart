@@ -13,6 +13,88 @@ enum Decision { keep, delete }
 
 enum MediaFilter { all, duplicates, photos, videos }
 
+/// الفترة الزمنية للفرز: الكل، آخر عدد من الأشهر، سنة كاملة، أو من تاريخ إلى تاريخ.
+/// تُحفظ كنص: all | last:3 | year:2025 | custom:startMs:endMs
+class DatePeriod {
+  const DatePeriod._(this.code);
+  final String code;
+
+  static const all = DatePeriod._('all');
+  factory DatePeriod.lastMonths(int m) => DatePeriod._('last:$m');
+  factory DatePeriod.year(int y) => DatePeriod._('year:$y');
+  factory DatePeriod.custom(DateTime from, DateTime to) => DatePeriod._(
+    'custom:${DateTime(from.year, from.month, from.day).millisecondsSinceEpoch}:${DateTime(to.year, to.month, to.day).add(const Duration(days: 1)).millisecondsSinceEpoch}',
+  );
+
+  static DatePeriod parse(String? code) {
+    if (code == null) return all;
+    final p = code.split(':');
+    try {
+      switch (p[0]) {
+        case 'last':
+          return DatePeriod.lastMonths(int.parse(p[1]));
+        case 'year':
+          return DatePeriod.year(int.parse(p[1]));
+        case 'custom':
+          int.parse(p[1]);
+          int.parse(p[2]);
+          return DatePeriod._(code);
+      }
+    } catch (_) {}
+    return all;
+  }
+
+  bool get isAll => code == 'all';
+  List<String> get _p => code.split(':');
+  String get kind => _p[0];
+  int get value => int.parse(_p[1]);
+
+  /// البداية (شامل) والنهاية (غير شامل). null يعني بلا حد.
+  (DateTime?, DateTime?) get bounds {
+    switch (kind) {
+      case 'last':
+        final now = DateTime.now();
+        return (DateTime(now.year, now.month - value, now.day), null);
+      case 'year':
+        return (DateTime(value), DateTime(value + 1));
+      case 'custom':
+        return (DateTime.fromMillisecondsSinceEpoch(int.parse(_p[1])), DateTime.fromMillisecondsSinceEpoch(int.parse(_p[2])));
+    }
+    return (null, null);
+  }
+
+  /// بداية ونهاية الفترة المخصصة (النهاية شاملة)، لعرضها وتعبئة منتقي التاريخ.
+  DateTime get customFrom => bounds.$1!;
+  DateTime get customTo => bounds.$2!.subtract(const Duration(days: 1));
+
+  bool contains(DateTime d) {
+    final (from, to) = bounds;
+    if (from != null && d.isBefore(from)) return false;
+    if (to != null && !d.isBefore(to)) return false;
+    return true;
+  }
+
+  String get label {
+    switch (kind) {
+      case 'last':
+        if (value == 1) return tr('آخر شهر', 'Last month');
+        if (value == 12) return tr('آخر سنة', 'Last year');
+        return tr('آخر $value أشهر', 'Last $value months');
+      case 'year':
+        return '$value';
+      case 'custom':
+        String f(DateTime d) => '${d.day}/${d.month}/${d.year}';
+        return '${f(customFrom)} - ${f(customTo)}';
+    }
+    return tr('كل التواريخ', 'All dates');
+  }
+
+  @override
+  bool operator ==(Object other) => other is DatePeriod && other.code == code;
+  @override
+  int get hashCode => code.hashCode;
+}
+
 /// يمسك حالة الفرز كلها: قائمة الملفات، القرارات، التقدم المحفوظ، وكشف المكرر.
 class Sorter extends ChangeNotifier {
   static const _kDecisions = 'decisions_v1';
@@ -21,6 +103,7 @@ class Sorter extends ChangeNotifier {
   static const _kTaken = 'taken_v1';
   static const _kHashes = 'hashes_v1';
   static const _kFilter = 'filter_v1';
+  static const _kPeriod = 'period_v1';
   static const _kStats = 'stats_v1';
 
   late SharedPreferences _prefs;
@@ -52,6 +135,7 @@ class Sorter extends ChangeNotifier {
   bool scanning = false;
 
   MediaFilter filter = MediaFilter.all;
+  DatePeriod period = DatePeriod.all;
 
   int totalDeleted = 0;
   int totalFreedBytes = 0;
@@ -110,6 +194,7 @@ class Sorter extends ChangeNotifier {
     final h = _prefs.getString(_kHashes);
     if (h != null) (jsonDecode(h) as Map<String, dynamic>).forEach((k, v) => _hashes[k] = int.parse(v as String));
     filter = MediaFilter.values.byName(_prefs.getString(_kFilter) ?? 'all');
+    period = DatePeriod.parse(_prefs.getString(_kPeriod));
     final st = _prefs.getStringList(_kStats);
     if (st != null && st.length == 2) {
       totalDeleted = int.parse(st[0]);
@@ -136,11 +221,22 @@ class Sorter extends ChangeNotifier {
     MediaFilter.videos => isVideo(a),
   };
 
-  int countFor(MediaFilter f) => assets.where((a) => _matches(a, f)).length;
+  bool inPeriod(AssetEntity a, [DatePeriod? p]) => (p ?? period).isAll || (p ?? period).contains(dateOf(a));
+
+  int countFor(MediaFilter f) => assets.where((a) => _matches(a, f) && inPeriod(a)).length;
+
+  /// عدد الملفات في فترة معيّنة (مع نوع الملفات المختار).
+  int countInPeriod(DatePeriod p) => assets.where((a) => _matches(a, filter) && inPeriod(a, p)).length;
+
+  /// عدد الملفات المتبقية بلا قرار في الفترة الحالية.
+  int get remainingInPeriod => assets.where((a) => !decisions.containsKey(a.id) && _matches(a, filter) && inPeriod(a)).length;
+
+  /// السنوات الموجودة في المعرض، من الأحدث للأقدم.
+  List<int> get years => (assets.map((a) => dateOf(a).year).toSet().toList()..sort()).reversed.toList();
 
   AssetEntity? get current {
     for (final a in assets) {
-      if (!decisions.containsKey(a.id) && _matches(a, filter)) return a;
+      if (!decisions.containsKey(a.id) && _matches(a, filter) && inPeriod(a)) return a;
     }
     return null;
   }
@@ -163,6 +259,12 @@ class Sorter extends ChangeNotifier {
   int get remainingDuplicates => assets.where((a) => isDuplicate(a) && !decisions.containsKey(a.id)).length;
 
   // ---------------- الأفعال ----------------
+
+  void setPeriod(DatePeriod p) {
+    period = p;
+    _prefs.setString(_kPeriod, p.code);
+    notifyListeners();
+  }
 
   void setFilter(MediaFilter f) {
     filter = f;

@@ -90,6 +90,18 @@ class _SortScreenState extends State<SortScreen> {
     await _cardKey.currentState?.fling(d);
   }
 
+  Future<void> _pickPeriod(Sorter s) async {
+    final picked = await showModalBottomSheet<DatePeriod>(
+      context: context,
+      backgroundColor: Palette.card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) => _PeriodSheet(sorter: s),
+    );
+    if (picked == null || !mounted) return;
+    s.setPeriod(picked);
+  }
+
   void _review() => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ReviewScreen(sorter: widget.sorter)));
 
   @override
@@ -154,6 +166,24 @@ class _SortScreenState extends State<SortScreen> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _pickPeriod(s),
+                      icon: const Icon(Icons.calendar_month_rounded, size: 18),
+                      label: Text(
+                        s.period.isAll ? tr('الفترة: كل التواريخ', 'Period: all dates') : '${s.period.label}  ·  ${tr('بقي', 'left')} ${s.remainingInPeriod}',
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: s.period.isAll ? Palette.ink : Palette.card,
+                        backgroundColor: s.period.isAll ? Palette.card : Palette.ink,
+                        side: const BorderSide(color: Palette.ink, width: 1.5),
+                        minimumSize: const Size(0, 38),
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                      ),
+                    ),
+                  ),
                   if (game) ...[const SizedBox(height: 10), DailyGoalBar(game: s.game)],
                   const SizedBox(height: 16),
                   Expanded(
@@ -165,8 +195,10 @@ class _SortScreenState extends State<SortScreen> {
                                 Text(tr('انتهيت!', 'All done!'), style: hand(36)),
                                 const SizedBox(height: 6),
                                 Text(
-                                  s.filter == MediaFilter.all
+                                  s.filter == MediaFilter.all && s.period.isAll
                                       ? tr('لنراجع الملفات المحددة قبل حذفها', "Let's review the marked files before deleting")
+                                      : !s.period.isAll
+                                      ? tr('لا توجد ملفات أخرى في هذه الفترة', 'No more files in this period')
                                       : tr('لا توجد ملفات أخرى في هذا التصنيف', 'No more files in this category'),
                                   style: const TextStyle(color: Palette.body),
                                 ),
@@ -295,6 +327,80 @@ class _ActionButton extends StatelessWidget {
               ),
               child: content,
             ),
+    );
+  }
+}
+
+/// قائمة اختيار الفترة الزمنية: سريعة (آخر أشهر)، حسب السنة، أو من تاريخ إلى تاريخ.
+class _PeriodSheet extends StatelessWidget {
+  const _PeriodSheet({required this.sorter});
+  final Sorter sorter;
+
+  Widget _tile(BuildContext context, DatePeriod p, {IconData? icon}) {
+    final selected = sorter.period == p;
+    return ListTile(
+      leading: Icon(icon ?? (selected ? Icons.radio_button_checked : Icons.radio_button_off), color: Palette.ink),
+      title: Text(
+        p.label,
+        style: TextStyle(fontWeight: selected ? FontWeight.w700 : FontWeight.w400, color: Palette.ink),
+      ),
+      trailing: Text('${sorter.countInPeriod(p)}', style: const TextStyle(color: Palette.muted)),
+      onTap: () => Navigator.of(context).pop(p),
+    );
+  }
+
+  Future<void> _custom(BuildContext context) async {
+    final now = DateTime.now();
+    final years = sorter.years;
+    final first = DateTime(years.isEmpty ? 1990 : years.last);
+    final cur = sorter.period;
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: first,
+      lastDate: now,
+      initialDateRange: cur.kind == 'custom' ? DateTimeRange(start: cur.customFrom, end: cur.customTo) : null,
+      helpText: tr('اختر الفترة', 'Choose period'),
+      saveText: tr('تم', 'Done'),
+    );
+    if (range == null || !context.mounted) return;
+    Navigator.of(context).pop(DatePeriod.custom(range.start, range.end));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final years = sorter.years;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text(tr('الفترة الزمنية', 'Time period'), style: hand(26)),
+            ),
+            _tile(context, DatePeriod.all),
+            for (final m in const [1, 3, 6, 12]) _tile(context, DatePeriod.lastMonths(m)),
+            ListTile(
+              leading: const Icon(Icons.date_range_rounded, color: Palette.ink),
+              title: Text(
+                sorter.period.kind == 'custom' ? sorter.period.label : tr('من تاريخ إلى تاريخ…', 'From date to date…'),
+                style: TextStyle(fontWeight: sorter.period.kind == 'custom' ? FontWeight.w700 : FontWeight.w400, color: Palette.ink),
+              ),
+              onTap: () => _custom(context),
+            ),
+            if (years.isNotEmpty) ...[
+              const Divider(indent: 20, endIndent: 20),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+                child: Text(tr('حسب السنة', 'By year'), style: const TextStyle(color: Palette.muted, fontSize: 13)),
+              ),
+              for (final y in years) _tile(context, DatePeriod.year(y)),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
