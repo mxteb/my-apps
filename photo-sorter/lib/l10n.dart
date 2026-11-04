@@ -40,3 +40,12 @@ String tr(String ar, String en) => isAr ? ar : en;
 
 /// "ملفًا" بالعربي، و file/files بالإنجليزي.
 String filesWord(int n) => isAr ? 'ملفًا' : (n == 1 ? 'file' : 'files');
+
+/// عدد الألبومات بصيغة عربية صحيحة: ألبوم واحد، ألبومين، 3 ألبومات، 11 ألبومًا.
+String albumsCount(int n) {
+  if (!isAr) return '$n album${n == 1 ? '' : 's'}';
+  if (n == 1) return 'ألبوم واحد';
+  if (n == 2) return 'ألبومين';
+  if (n <= 10) return '$n ألبومات';
+  return '$n ألبومًا';
+}

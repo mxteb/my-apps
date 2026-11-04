@@ -13,6 +13,16 @@ enum Decision { keep, delete }
 
 enum MediaFilter { all, duplicates, photos, videos }
 
+/// ألبوم من المعرض: اسمه وعدد ملفاته وغلافه.
+class AlbumInfo {
+  AlbumInfo(this.path, this.count, this.cover);
+  final AssetPathEntity path;
+  final int count;
+  final AssetEntity? cover;
+  String get id => path.id;
+  String get name => path.name.isEmpty ? tr('بدون اسم', 'Untitled') : path.name;
+}
+
 /// الفترة الزمنية للفرز: الكل، آخر عدد من الأشهر، سنة كاملة، أو من تاريخ إلى تاريخ.
 /// تُحفظ كنص: all | last:3 | year:2025 | custom:startMs:endMs
 class DatePeriod {
@@ -104,6 +114,7 @@ class Sorter extends ChangeNotifier {
   static const _kHashes = 'hashes_v1';
   static const _kFilter = 'filter_v1';
   static const _kPeriod = 'period_v1';
+  static const _kAlbums = 'albums_v1';
   static const _kStats = 'stats_v1';
 
   late SharedPreferences _prefs;
@@ -137,6 +148,14 @@ class Sorter extends ChangeNotifier {
   MediaFilter filter = MediaFilter.all;
   DatePeriod period = DatePeriod.all;
 
+  /// ألبومات المعرض، والألبومات المختارة للفرز (فارغة = كل الصور).
+  List<AlbumInfo> albums = [];
+  Set<String> albumIds = {};
+
+  /// ملفات الألبومات المختارة، null يعني بلا تقييد.
+  Set<String>? _albumAssets;
+  bool albumsLoading = false;
+
   int totalDeleted = 0;
   int totalFreedBytes = 0;
 
@@ -152,6 +171,7 @@ class Sorter extends ChangeNotifier {
       return;
     }
     await _loadAssets();
+    await _loadAlbums();
     loading = false;
     notifyListeners();
     _scanDuplicates();
@@ -179,6 +199,64 @@ class Sorter extends ChangeNotifier {
     history.removeWhere((id) => !ids.contains(id));
   }
 
+  Future<void> _loadAlbums() async {
+    try {
+      final paths = await PhotoManager.getAssetPathList(type: RequestType.common, hasAll: false);
+      final list = <AlbumInfo>[];
+      for (final p in paths) {
+        final count = await p.assetCountAsync;
+        if (count == 0) continue;
+        final first = await p.getAssetListRange(start: 0, end: 1);
+        list.add(AlbumInfo(p, count, first.isEmpty ? null : first.first));
+      }
+      list.sort((a, b) => b.count.compareTo(a.count));
+      albums = list;
+    } catch (_) {
+      albums = [];
+    }
+    final known = albums.map((a) => a.id).toSet();
+    albumIds.removeWhere((id) => !known.contains(id));
+    await _buildAlbumFilter();
+  }
+
+  Future<void> _buildAlbumFilter() async {
+    if (albumIds.isEmpty) {
+      _albumAssets = null;
+      return;
+    }
+    final ids = <String>{};
+    for (final a in albums.where((a) => albumIds.contains(a.id))) {
+      const page = 500;
+      for (var start = 0; start < a.count; start += page) {
+        ids.addAll((await a.path.getAssetListRange(start: start, end: start + page)).map((e) => e.id));
+      }
+    }
+    _albumAssets = ids;
+  }
+
+  /// يختار ألبومات الفرز (مجموعة فارغة = كل الصور).
+  Future<void> setAlbums(Set<String> ids) async {
+    albumIds = {...ids};
+    _prefs.setStringList(_kAlbums, albumIds.toList());
+    albumsLoading = true;
+    notifyListeners();
+    await _buildAlbumFilter();
+    albumsLoading = false;
+    notifyListeners();
+  }
+
+  String get albumsLabel {
+    if (albumIds.isEmpty) return tr('كل الألبومات', 'All albums');
+    if (albumIds.length == 1) {
+      for (final a in albums) {
+        if (a.id == albumIds.first) return a.name;
+      }
+    }
+    return albumsCount(albumIds.length);
+  }
+
+  bool inAlbums(AssetEntity a) => _albumAssets == null || _albumAssets!.contains(a.id);
+
   // ---------------- الحفظ ----------------
 
   void _restore() {
@@ -195,6 +273,7 @@ class Sorter extends ChangeNotifier {
     if (h != null) (jsonDecode(h) as Map<String, dynamic>).forEach((k, v) => _hashes[k] = int.parse(v as String));
     filter = MediaFilter.values.byName(_prefs.getString(_kFilter) ?? 'all');
     period = DatePeriod.parse(_prefs.getString(_kPeriod));
+    albumIds = (_prefs.getStringList(_kAlbums) ?? []).toSet();
     final st = _prefs.getStringList(_kStats);
     if (st != null && st.length == 2) {
       totalDeleted = int.parse(st[0]);
@@ -223,20 +302,20 @@ class Sorter extends ChangeNotifier {
 
   bool inPeriod(AssetEntity a, [DatePeriod? p]) => (p ?? period).isAll || (p ?? period).contains(dateOf(a));
 
-  int countFor(MediaFilter f) => assets.where((a) => _matches(a, f) && inPeriod(a)).length;
+  int countFor(MediaFilter f) => assets.where((a) => _matches(a, f) && inPeriod(a) && inAlbums(a)).length;
 
   /// عدد الملفات في فترة معيّنة (مع نوع الملفات المختار).
-  int countInPeriod(DatePeriod p) => assets.where((a) => _matches(a, filter) && inPeriod(a, p)).length;
+  int countInPeriod(DatePeriod p) => assets.where((a) => _matches(a, filter) && inPeriod(a, p) && inAlbums(a)).length;
 
   /// عدد الملفات المتبقية بلا قرار في الفترة الحالية.
-  int get remainingInPeriod => assets.where((a) => !decisions.containsKey(a.id) && _matches(a, filter) && inPeriod(a)).length;
+  int get remainingInPeriod => assets.where((a) => !decisions.containsKey(a.id) && _matches(a, filter) && inPeriod(a) && inAlbums(a)).length;
 
   /// السنوات الموجودة في المعرض، من الأحدث للأقدم.
   List<int> get years => (assets.map((a) => dateOf(a).year).toSet().toList()..sort()).reversed.toList();
 
   AssetEntity? get current {
     for (final a in assets) {
-      if (!decisions.containsKey(a.id) && _matches(a, filter) && inPeriod(a)) return a;
+      if (!decisions.containsKey(a.id) && _matches(a, filter) && inPeriod(a) && inAlbums(a)) return a;
     }
     return null;
   }

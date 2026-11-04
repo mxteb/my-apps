@@ -10,6 +10,7 @@ import '../sorter.dart';
 import '../theme.dart';
 import '../widgets/game_widgets.dart';
 import '../widgets/swipe_card.dart';
+import '../widgets/thumb.dart';
 import 'review.dart';
 import 'viewer.dart';
 
@@ -90,6 +91,34 @@ class _SortScreenState extends State<SortScreen> {
     await _cardKey.currentState?.fling(d);
   }
 
+  Widget _scopeButton({required IconData icon, required bool active, required String label, required VoidCallback onPressed}) => OutlinedButton.icon(
+    onPressed: onPressed,
+    icon: Icon(icon, size: 18),
+    label: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 170),
+      child: Text(label, overflow: TextOverflow.ellipsis),
+    ),
+    style: OutlinedButton.styleFrom(
+      foregroundColor: active ? Palette.card : Palette.ink,
+      backgroundColor: active ? Palette.ink : Palette.card,
+      side: const BorderSide(color: Palette.ink, width: 1.5),
+      minimumSize: const Size(0, 38),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+    ),
+  );
+
+  Future<void> _pickAlbums(Sorter s) async {
+    final picked = await showModalBottomSheet<Set<String>>(
+      context: context,
+      backgroundColor: Palette.card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) => _AlbumSheet(sorter: s),
+    );
+    if (picked == null || !mounted) return;
+    await s.setAlbums(picked);
+  }
+
   Future<void> _pickPeriod(Sorter s) async {
     final picked = await showModalBottomSheet<DatePeriod>(
       context: context,
@@ -167,21 +196,31 @@ class _SortScreenState extends State<SortScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _pickPeriod(s),
-                      icon: const Icon(Icons.calendar_month_rounded, size: 18),
-                      label: Text(
-                        s.period.isAll ? tr('الفترة: كل التواريخ', 'Period: all dates') : '${s.period.label}  ·  ${tr('بقي', 'left')} ${s.remainingInPeriod}',
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: s.period.isAll ? Palette.ink : Palette.card,
-                        backgroundColor: s.period.isAll ? Palette.card : Palette.ink,
-                        side: const BorderSide(color: Palette.ink, width: 1.5),
-                        minimumSize: const Size(0, 38),
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                      ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _scopeButton(
+                          icon: Icons.photo_album_outlined,
+                          active: s.albumIds.isNotEmpty,
+                          label: s.albumIds.isEmpty ? tr('الألبومات: الكل', 'Albums: all') : s.albumsLabel,
+                          onPressed: () => _pickAlbums(s),
+                        ),
+                        const SizedBox(width: 8),
+                        _scopeButton(
+                          icon: Icons.calendar_month_rounded,
+                          active: !s.period.isAll,
+                          label: s.period.isAll ? tr('الفترة: كل التواريخ', 'Period: all dates') : s.period.label,
+                          onPressed: () => _pickPeriod(s),
+                        ),
+                        if (s.albumIds.isNotEmpty || !s.period.isAll) ...[
+                          const SizedBox(width: 10),
+                          Text(
+                            s.albumsLoading ? '…' : tr('بقي ${s.remainingInPeriod}', '${s.remainingInPeriod} left'),
+                            style: const TextStyle(color: Palette.muted, fontSize: 13),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                   if (game) ...[const SizedBox(height: 10), DailyGoalBar(game: s.game)],
@@ -195,8 +234,12 @@ class _SortScreenState extends State<SortScreen> {
                                 Text(tr('انتهيت!', 'All done!'), style: hand(36)),
                                 const SizedBox(height: 6),
                                 Text(
-                                  s.filter == MediaFilter.all && s.period.isAll
+                                  s.albumsLoading
+                                      ? tr('جارٍ تحميل الألبوم…', 'Loading album…')
+                                      : s.filter == MediaFilter.all && s.period.isAll && s.albumIds.isEmpty
                                       ? tr('لنراجع الملفات المحددة قبل حذفها', "Let's review the marked files before deleting")
+                                      : s.albumIds.isNotEmpty
+                                      ? tr('لا توجد ملفات أخرى في الألبومات المختارة', 'No more files in the chosen albums')
                                       : !s.period.isAll
                                       ? tr('لا توجد ملفات أخرى في هذه الفترة', 'No more files in this period')
                                       : tr('لا توجد ملفات أخرى في هذا التصنيف', 'No more files in this category'),
@@ -398,6 +441,102 @@ class _PeriodSheet extends StatelessWidget {
               ),
               for (final y in years) _tile(context, DatePeriod.year(y)),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// اختيار ألبوم أو أكثر للفرز منها فقط.
+class _AlbumSheet extends StatefulWidget {
+  const _AlbumSheet({required this.sorter});
+  final Sorter sorter;
+
+  @override
+  State<_AlbumSheet> createState() => _AlbumSheetState();
+}
+
+class _AlbumSheetState extends State<_AlbumSheet> {
+  late final Set<String> _sel = {...widget.sorter.albumIds};
+
+  @override
+  Widget build(BuildContext context) {
+    final albums = widget.sorter.albums;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Row(
+                children: [
+                  Expanded(child: Text(tr('الألبومات', 'Albums'), style: hand(26))),
+                  if (_sel.isNotEmpty) TextButton(onPressed: () => setState(_sel.clear), child: Text(tr('إلغاء التحديد', 'Clear'))),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(
+                  tr('اختر ألبومًا أو أكثر، وسيكون الفرز من ملفاتها فقط.', 'Pick one or more albums to sort only their files.'),
+                  style: const TextStyle(color: Palette.muted, fontSize: 13),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Flexible(
+              child: albums.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(tr('لم يتم العثور على ألبومات', 'No albums found'), style: const TextStyle(color: Palette.body)),
+                    )
+                  : ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final a in albums)
+                          CheckboxListTile(
+                            value: _sel.contains(a.id),
+                            onChanged: (v) => setState(() => v == true ? _sel.add(a.id) : _sel.remove(a.id)),
+                            activeColor: Palette.ink,
+                            controlAffinity: ListTileControlAffinity.trailing,
+                            secondary: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: SizedBox(
+                                width: 48,
+                                height: 48,
+                                child: a.cover == null ? const ColoredBox(color: Palette.paper) : AssetThumb(a.cover!, size: 120),
+                              ),
+                            ),
+                            title: Text(
+                              a.name,
+                              style: const TextStyle(color: Palette.ink),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text('${a.count} ${filesWord(a.count)}', style: const TextStyle(color: Palette.muted, fontSize: 12)),
+                          ),
+                      ],
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(_sel),
+                  style: FilledButton.styleFrom(backgroundColor: Palette.ink, foregroundColor: Palette.card, minimumSize: const Size(0, 48)),
+                  child: Text(
+                    _sel.isEmpty
+                        ? tr('الفرز من كل الألبومات', 'Sort from all albums')
+                        : tr('الفرز من ${albumsCount(_sel.length)}', 'Sort from ${albumsCount(_sel.length)}'),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
